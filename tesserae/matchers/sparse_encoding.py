@@ -265,7 +265,7 @@ def get_text_frequencies(connection, feature, text_id):
 
     Returns
     -------
-    dict [int, float]
+    numba.typed.Dict [int, float]
         the key should be a feature index of type form; the associated
         value is the average proportion of words in the text sharing at
         least one same feature type with the key word
@@ -334,9 +334,11 @@ def get_text_frequencies(connection, feature, text_id):
             freqs[cur_token] = word_counts[j]
         else:
             freqs[cur_token] += word_counts[j]
+    result = numba.typed.Dict.empty(key_type=numba.types.int64,
+            value_type=numba.types.float64)
     for tok_ind in freqs:
-        freqs[tok_ind] = freqs[tok_ind] / text_token_count
-    return freqs
+        result[tok_ind] = freqs[tok_ind] / text_token_count
+    return result
 
 
 def get_corpus_frequencies(connection, feature, language):
@@ -406,14 +408,14 @@ def _score_by_corpus_frequencies(connection, feature, texts, target_units,
         source_units,
         features, stoplist, distance_metric, max_distance):
     if texts[0].language != texts[1].language:
-        source_frequencies_getter = _averaged_freq_getter(
+        source_frequencies_getter = _build_averaged_freq_getter(
             get_corpus_frequencies(connection, feature, texts[0].language),
             source_units)
-        target_frequencies_getter = _averaged_freq_getter(
+        target_frequencies_getter = _build_averaged_freq_getter(
             get_corpus_frequencies(connection, feature, texts[1].language),
             target_units)
     else:
-        source_frequencies_getter = _averaged_freq_getter(
+        source_frequencies_getter = _build_averaged_freq_getter(
             get_corpus_frequencies(connection, feature, texts[0].language),
             itertools.chain.from_iterable([source_units, target_units]))
         target_frequencies_getter = source_frequencies_getter
@@ -425,16 +427,17 @@ def _score_by_corpus_frequencies(connection, feature, texts, target_units,
 def _score_by_text_frequencies(connection, feature, texts, target_units,
         source_units,
         features, stoplist, distance_metric, max_distance):
-    source_frequencies_getter = _lookup_wrapper(get_text_frequencies(
-            connection, feature, texts[0].id))
-    target_frequencies_getter = _lookup_wrapper(get_text_frequencies(
-            connection, feature, texts[1].id))
+    source_frequencies_getter = get_text_frequencies(
+            connection, feature, texts[0].id)
+    target_frequencies_getter = get_text_frequencies(
+            connection, feature, texts[1].id)
     return _score(target_units, source_units, features, stoplist,
             distance_metric,
             max_distance, source_frequencies_getter, target_frequencies_getter)
 
 
-def _get_distance_by_least_frequency(get_freq, positions, forms):
+@numba.njit
+def _get_distance_by_least_frequency(form2freq, positions, forms):
     """Obtains the distance by least frequency for a unit
 
     Contrary to the v3 help documentation on --dist in read_table.pl, v3
@@ -445,31 +448,31 @@ def _get_distance_by_least_frequency(get_freq, positions, forms):
 
     Parameters
     ----------
-    get_freq : (int) -> float
-        a function that takes a word form index as input and returns its
-        frequency as output
-    positions : list of int
+    form2freq : dict [int, float]
+        mapping between word form index and its frequency
+    positions : 1d np.array of ints
         token positions in the unit where matches were found
-    form_indices : list of int
+    forms : 1d np.array of ints
         the token forms of the unit
     """
-    freqs = [get_freq(forms[i]) for i in positions]
+    freqs = np.array([form2freq[forms[i]] for i in positions])
     freq_sort = np.argsort(freqs)
     idx = np.array([positions[i] for i in freq_sort])
     if idx.shape[0] >= 2:
-        not_first_pos = [s for s in idx if s != idx[0]]
-        if not_first_pos:
+        not_first_pos = np.array([s for s in idx if s != idx[0]])
+        if len(not_first_pos) > 0:
             end = not_first_pos[0]
             return np.abs(end - idx[0]) + 1
     return 0
 
 
+@numba.njit
 def _get_distance_by_span(matched_positions):
     """Calculate distance between two matching words
 
     Parameters
     ----------
-    matched_positions : list of int
+    matched_positions : 1d np.array of ints
         the positions at which matched words were found in a unit
     """
     start_pos = np.min(matched_positions)
@@ -479,23 +482,35 @@ def _get_distance_by_span(matched_positions):
     return 0
 
 
-def _lookup_wrapper(d):
-    """Useful for making dictionaries act like functions"""
-    def _inner(key):
-        return d[key]
-    return _inner
+def _build_averaged_freq_getter(d, units_iter):
+    """Maps word form index to average of the frequencies of its extracted
+    feature form indices
 
+    Parameters
+    ----------
+    d : dict [int, float]
+        mapping between feature form index and its frequency
+    units_iter : list of dicts
+        an iterable over dictionaries representing units; each dictionary must
+        contain two string keys: 'forms' and 'features'; the 'forms' key is
+        associated with a list of ints; the 'features' key is associated with a
+        list of list of ints; the xth int of the 'forms' list corresponds to
+        the xth list of the 'features' list such that the xth 'features' list
+        is the list feature token indices extracted from the word form index
+        specified by the xth 'forms' int
 
-def _averaged_freq_getter(d, units_iter):
-    cache = {}
+    Returns
+    -------
+    numba.typed.Dict [int, float]
+    """
+    result = numba.typed.Dict.empty(key_type=numba.types.int64,
+            value_type=numba.types.float64)
     for unit in units_iter:
         for form, feats in zip(unit['forms'], unit['features']):
-            if form in cache:
+            if form in result:
                 continue
-            cache[form] = np.mean([d[f] for f in feats])
-    def _inner(key):
-        return cache[key]
-    return _inner
+            result[form] = np.mean([d[f] for f in feats])
+    return result
 
 
 def _extract_features_and_positions(units, stoplist_set):
@@ -757,7 +772,6 @@ def _gen_matches(target_units, source_units, stoplist, features_size):
     coo = match_matrix.tocoo()
     hits2t_positions, hits2s_positions = _bin_hits_to_unit_indices(
             coo.row, coo.col, target_breaks, source_breaks)
-    print(len(hits2t_positions))
     for key, t_positions in hits2t_positions.items():
         s_positions = hits2s_positions[key]
         if len(set(t_positions)) >= 2 and len(set(s_positions)) >= 2:
@@ -772,8 +786,8 @@ def _score(target_units, source_units, features, stoplist, distance_metric,
     features_size = len(features)
     for target_unit, t_positions, source_unit, s_positions in _gen_matches(
             target_units, source_units, stoplist, features_size):
-        target_forms = target_unit['forms']
-        source_forms = source_unit['forms']
+        target_forms = np.array(target_unit['forms'])
+        source_forms = np.array(source_unit['forms'])
         if distance_metric == 'span':
             # adjacent matched words have a distance of 2, etc.
             target_distance = _get_distance_by_span(t_positions)
@@ -790,10 +804,10 @@ def _score(target_units, source_units, features, stoplist, distance_metric,
             continue
         distance = source_distance + target_distance
         if distance < max_distance:
-            match_frequencies = [target_frequencies_getter(target_forms[pos])
+            match_frequencies = [target_frequencies_getter[target_forms[pos]]
                 for pos in t_positions]
             match_frequencies.extend(
-                [source_frequencies_getter(source_forms[pos])
+                [source_frequencies_getter[source_forms[pos]]
                 for pos in s_positions])
             score = np.log((np.sum(np.power(match_frequencies, -1))) / distance)
             target_features = target_unit['features']
