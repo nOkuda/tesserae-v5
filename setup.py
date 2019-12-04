@@ -101,6 +101,7 @@ setup(
         'numpy>=1.14.0',
         'pymongo>=3.6.1',
         'scipy',
+        'numba'
     ],
     cmdclass={'install': InstallLemmataModels}
 )

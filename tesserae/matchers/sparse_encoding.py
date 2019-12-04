@@ -616,7 +616,7 @@ def _construct_unit_feature_matrix(units, stoplist_set, features_size):
     )
 
 
-#@numba.njit
+@numba.njit
 def _bin_hits_to_unit_indices(rows, cols, target_breaks, source_breaks):
     """Extract which units matched from the ``match_matrix``
 
@@ -758,10 +758,12 @@ def _gen_matches(target_units, source_units, stoplist, features_size):
     hits2t_positions, hits2s_positions = _bin_hits_to_unit_indices(
             coo.row, coo.col, target_breaks, source_breaks)
     print(len(hits2t_positions))
-    for (t_ind, s_ind), t_positions in hits2t_positions.items():
-        if len(t_positions) >= 2:
+    for key, t_positions in hits2t_positions.items():
+        s_positions = hits2s_positions[key]
+        if len(set(t_positions)) >= 2 and len(set(s_positions)) >= 2:
+            t_ind, s_ind = key
             yield (target_units[t_ind], t_positions,
-                source_units[s_ind], hits2s_positions[(t_ind, s_ind)])
+                source_units[s_ind], s_positions)
 
 
 def _score(target_units, source_units, features, stoplist, distance_metric,
