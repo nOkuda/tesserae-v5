@@ -235,10 +235,35 @@ def _build_relations(results):
         target_loc = match['target_tag'].split()[-1]
         source_loc = match['source_tag'].split()[-1]
         if target_loc not in relations:
-            relations[target_loc] = {source_loc: match}
-        elif source_loc not in relations[target_loc]:
-            relations[target_loc][source_loc] = match
+            relations[target_loc] = {}
+        if source_loc not in relations[target_loc]:
+            relations[target_loc][source_loc] = []
+        relations[target_loc][source_loc].append(match)
     return relations
+
+
+def _get_corresponding_v5_match(v3_match, v5_matches):
+    v3_source_snippet = v3_match['source_snippet'].replace('*', '')
+    v3_target_snippet = v3_match['target_snippet'].replace('*', '')
+    for v5_match in v5_matches:
+        v5_source_snippet = v5_match['source_snippet']
+        v5_target_snippet = v5_match['target_snippet']
+        if v5_source_snippet in v3_source_snippet and \
+                v5_target_snippet in v3_target_snippet:
+            return v5_match
+    return None
+
+
+def _get_corresponding_v3_match(v5_match, v3_matches):
+    v5_source_snippet = v5_match['source_snippet']
+    v5_target_snippet = v5_match['target_snippet']
+    for v3_match in v3_matches:
+        v3_source_snippet = v3_match['source_snippet'].replace('*', '')
+        v3_target_snippet = v3_match['target_snippet'].replace('*', '')
+        if v5_source_snippet in v3_source_snippet and \
+                v5_target_snippet in v3_target_snippet:
+            return v3_match
+    return None
 
 
 def _load_v3_results(minitext_path, tab_filename):
@@ -282,32 +307,48 @@ class V3Checker:
             for source_loc in v3_relations[target_loc]:
                 if target_loc not in v5_relations or \
                         source_loc not in v5_relations[target_loc]:
-                    in_v3_not_in_v5.append(
+                    in_v3_not_in_v5.extend(
                         v3_relations[target_loc][source_loc])
                     continue
-                v3_match = v3_relations[target_loc][source_loc]
-                v5_match = v5_relations[target_loc][source_loc]
-                v3_score = v3_match['score']
-                v5_score = v5_match['score']
-                if f'{v5_score:.3f}' != f'{v3_score:.3f}':
-                    score_discrepancies.append(
-                        (target_loc, source_loc, v5_score - v3_score))
-                v5_match_features = set(v5_match['matched_features'])
-                v3_match_features = set()
-                for match_f in v3_match['matched_features']:
-                    for f in match_f.split('-'):
-                        v3_match_features.add(f)
-                only_in_v5 = v5_match_features - v3_match_features
-                only_in_v3 = v3_match_features - v5_match_features
-                if only_in_v5 or only_in_v3:
-                    match_discrepancies.append(
-                        (target_loc, source_loc, only_in_v5, only_in_v3))
+                v3_matches = v3_relations[target_loc][source_loc]
+                v5_matches = v5_relations[target_loc][source_loc]
+                for v3_match in v3_matches:
+                    v3_score = v3_match['score']
+                    v5_match = _get_corresponding_v5_match(
+                        v3_match, v5_matches)
+                    if v5_match is None:
+                        in_v3_not_in_v5.append(v3_match)
+                        continue
+                    v5_score = v5_match['score']
+                    if f'{v5_score:.3f}' != f'{v3_score:.3f}':
+                        score_discrepancies.append(
+                            (target_loc, source_loc, v5_score - v3_score))
+                    v5_match_features = set(v5_match['matched_features'])
+                    v3_match_features = set()
+                    for match_f in v3_match['matched_features']:
+                        for f in match_f.split('-'):
+                            v3_match_features.add(f)
+                    only_in_v5 = v5_match_features - v3_match_features
+                    only_in_v3 = v3_match_features - v5_match_features
+                    if only_in_v5 or only_in_v3:
+                        match_discrepancies.append(
+                            (target_loc, v5_match['target_snippet'],
+                             source_loc, v5_match['source_snippet'],
+                             only_in_v5, only_in_v3,
+                             v5_match_features & v3_match_features))
         for target_loc in v5_relations:
             for source_loc in v5_relations[target_loc]:
                 if target_loc not in v3_relations or \
                         source_loc not in v3_relations[target_loc]:
-                    in_v5_not_in_v3.append(
+                    in_v5_not_in_v3.extend(
                         v5_relations[target_loc][source_loc])
+                v3_matches = v3_relations[target_loc][source_loc]
+                v5_matches = v5_relations[target_loc][source_loc]
+                for v5_match in v5_matches:
+                    v3_match = _get_corresponding_v3_match(
+                        v5_match, v3_matches)
+                    if v3_match is None:
+                        in_v5_not_in_v3.append(v5_match)
         print('# Score discrepancies')
         pprint.pprint(score_discrepancies)
         print('# Match discrepancies')
