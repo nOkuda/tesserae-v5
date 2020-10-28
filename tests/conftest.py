@@ -243,6 +243,8 @@ def _build_relations(results):
 
 
 def _get_corresponding_v5_match(v3_match, v5_matches):
+    if len(v5_matches) == 1:
+        return v5_matches[0]
     v3_source_snippet = v3_match['source_snippet'].replace('*', '')
     v3_target_snippet = v3_match['target_snippet'].replace('*', '')
     for v5_match in v5_matches:
@@ -255,6 +257,8 @@ def _get_corresponding_v5_match(v3_match, v5_matches):
 
 
 def _get_corresponding_v3_match(v5_match, v3_matches):
+    if len(v3_matches) == 1:
+        return v3_matches[0]
     v5_source_snippet = v5_match['source_snippet']
     v5_target_snippet = v5_match['target_snippet']
     for v3_match in v3_matches:
@@ -349,14 +353,15 @@ class V3Checker:
                         v5_match, v3_matches)
                     if v3_match is None:
                         in_v5_not_in_v3.append(v5_match)
-        print('# Score discrepancies')
-        pprint.pprint(score_discrepancies)
-        print('# Match discrepancies')
-        pprint.pprint(match_discrepancies)
-        print('# In v5 but not in v3')
-        pprint.pprint(in_v5_not_in_v3)
-        print('# In v3 but not in v5')
-        pprint.pprint(in_v3_not_in_v5)
+        pp = pprint.PrettyPrinter(indent=2, compact=True)
+        pp.pprint('# Score discrepancies')
+        pp.pprint(score_discrepancies)
+        pp.pprint('# Match discrepancies')
+        pp.pprint(match_discrepancies)
+        pp.pprint('# In v5 but not in v3')
+        pp.pprint(in_v5_not_in_v3)
+        pp.pprint('# In v3 but not in v5')
+        pp.pprint(in_v3_not_in_v5)
         assert not score_discrepancies
         assert not match_discrepancies
         assert not in_v5_not_in_v3
